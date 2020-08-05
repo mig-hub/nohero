@@ -1,0 +1,181 @@
+#!/bin/bash
+
+# Exit immediately if a command exits with a non-zero status.
+set -e
+
+# HELPERS
+# =======
+
+# Echo on stderr.
+function errcho { >&2 echo $@; }
+
+# Echo with a prefix.
+# Use typeset to use it on remote as well.
+function nohero_echo {
+  printf "\033[0;34mNoHero |>\033[0m $@\n"
+}
+function nohero_errcho {
+  nohero_echo "\033[0;31m$@\033[0m"
+}
+
+function confirm {
+  read -p "[y/n] " -n 1 -r
+  echo
+  if [[ $REPLY =~ ^[Yy]$ ]]; then
+    "$@"
+  fi
+}
+
+# Stolen from RBENV installer script.
+# Prints an error when trying to invoke `git`.
+# Better than a systematic check.
+if ! type -p git >/dev/null; then
+  git() {
+    errcho "Error: git is required for nohero. Please install git and try again."
+    exit 1
+  }
+fi
+
+# Checks if IP address is valid IPV4
+function valid_ip {
+  local ip=$1
+  local stat=1
+  if [[ $ip =~ ^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}$ ]]; then
+    OIFS=$IFS
+    IFS='.'
+    ip=($ip)
+    IFS=$OIFS
+    [[ ${ip[0]} -le 255 && ${ip[1]} -le 255 \
+      && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+          stat=$?
+  fi
+  return $stat
+}
+
+# Builds a string for remote functions that are defined in this script.
+# Pass function names without the "remote_" prefix. 
+# For each argument it will add the local typeset so that the remote can call it.
+# And it add a call to this function.
+# Could be improved by not having multiple typesets if a functions is called
+# multiple times.
+function remote_script {
+  local str="$(typeset -f nohero_echo -f nohero_errcho -f confirm)\n"
+  for val in "$@"; do
+    local cmd="remote_${val}"
+    str="${str}$(typeset -f $cmd)\n${cmd}\n"
+  done
+  printf "$str"
+}
+
+# Execute local functions on remote via ssh.
+# Remote is the first argument and the rest of the arguments are local functions.
+# Pass function names without the "remote_" prefix. 
+function remote_do {
+  nohero_echo "Connecting as $1. Is it OK?"
+  confirm ssh -t "$1" "$(remote_script ${@:2})"
+}
+
+# Remote functions
+# ================
+
+# These functions are prefixed with "remote_" because
+# they are not meant to use locally.
+# They are meant to be sent to the remote without the prefix
+# using `remote_do` helper.
+
+function remote_add_user {
+  local username=nohero
+  if ! id -u "$username" > /dev/null 2>&1; then
+    adduser --disabled-password --shell "/bin/bash" --gecos "" "$username"
+  else
+    nohero_echo "User '$username' already exists."
+  fi
+  nohero_echo "Making sure '$username' is in sudo group..."
+  usermod -aG sudo "$username"
+  if [[ -d "/home/$username/.ssh" ]]; then
+    nohero_echo "Directory '.ssh' already exists."
+  else
+    nohero_echo "Copying '/root/.ssh' directory to '/home/$username/.ssh'..."
+    if [[ ! -d '/root/.ssh' ]]; then
+      nohero_errcho "Error: No '/root/.ssh' directory was found. NoHero works only with SSH keys connections."
+      exit 1
+    fi
+    cp -Rfv "/root/.ssh" "/home/$username/"
+    chown -R "$username:$username" "/home/$username/.ssh"
+  fi
+  if ! grep -q "^$username " "/etc/sudoers"; then
+    # Not sure what is the cleanest way to do this.
+    # Basically we only want to allow ssh keys, not password for our user.
+    # So we need to make sure 'sudo' commands don't ask one.
+    nohero_echo "Editing '/etc/sudoers' to set NOPASSWD for '$username'."
+    echo "$username ALL=(ALL) NOPASSWD:ALL" | sudo EDITOR='tee -a' visudo
+  else
+    nohero_echo "There is already a line for '$username' in the '/etc/sudoers' file."
+  fi
+}
+
+function remote_apt_update {
+  nohero_echo "Updating apt..."
+  sudo apt update
+}
+
+function remote_install_git {
+  if ! type -p git >/dev/null; then
+    sudo apt install git
+  else
+    nohero_echo "Git already installed. Do you want to upgrade it?"
+    confirm sudo apt install git
+  fi
+}
+
+# Sub Commands
+# ============
+
+# Prints info about Server using git remotes.
+function server {
+  local gitremote=nohero
+  while getopts "r:" option; do
+    case "$option" in
+      r) 
+        gitremote=${OPTARG}
+        ;;
+      *)
+        exit 1
+    esac
+  done
+  git remote get-url $gitremote 2>/dev/null || \
+    errcho "Error: cannot find git remote '$gitremote'."
+}
+
+# Takes IP address as argument and setup the server.
+function server_init {
+  local usage="Usage: nohero sever:init <ip-address>"
+  if [[ $# -eq 0 ]]; then
+    errcho "Error: missing IP address"
+    errcho $usage
+    exit 1
+  elif [[ $# -ne 1 ]]; then
+    errcho "Error: wrong number of arguments"
+    errcho $usage
+    exit 1
+  elif ! valid_ip $1; then
+    errcho "Error: '$1' does not match an IP address"
+    errcho $usage
+    exit 1
+  fi
+  remote_do "root@$1" add_user
+  nohero_echo "We are finished connecting as 'root'."
+  remote_do "nohero@$1" apt_update install_git
+}
+
+# Execute local commands and proxy the remote ones.
+if [[ $1 =~ ^(debug|server|server:init)$ ]]; then
+  # Call the function if the subcommand is known.
+  # Replace `:` by `_` in subcommand name.
+  "${1//:/_}" "${@:2}" 
+else
+  # This part needs to delegate if possible
+  errcho "Warning: Invalid subcommand $1"
+  exit 1
+fi
+
