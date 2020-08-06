@@ -56,13 +56,14 @@ function valid_ip {
 # Pass function names without the "remote_" prefix. 
 # For each argument it will add the local typeset so that the remote can call it.
 # And it add a call to this function.
+# Functions can have arguments if you pass the whole command as a single string.
 # Could be improved by not having multiple typesets if a functions is called
 # multiple times.
 function remote_script {
   local str="$(typeset -f nohero_echo -f nohero_errcho -f confirm)\n"
   for val in "$@"; do
-    local cmd="remote_${val}"
-    str="${str}$(typeset -f $cmd)\n${cmd}\n"
+    local cmd="remote_${val/%\ */}"
+    str="${str}$(typeset -f $cmd)\nremote_${val}\n"
   done
   printf "$str"
 }
@@ -72,7 +73,7 @@ function remote_script {
 # Pass function names without the "remote_" prefix. 
 function remote_do {
   nohero_echo "Connecting as $1. Is it OK?"
-  confirm ssh -t "$1" "$(remote_script ${@:2})"
+  confirm ssh -t "$1" "$(remote_script "${@:2}")"
 }
 
 # Remote functions
@@ -119,12 +120,16 @@ function remote_apt_update {
   sudo apt update
 }
 
-function remote_install_git {
-  if ! type -p git >/dev/null; then
-    sudo apt install git
+function remote_install_pkg {
+  if [[ $# -eq 0 ]] || [[ $# -gt 2 ]]; then
+    nohero_errcho "Usage: remote_install_pkg <package-name> [command-to-test-installation]"
+    exit 1
+  fi
+  if ! type -p "${2:-$1}" >/dev/null; then
+    sudo apt install "$1"
   else
-    nohero_echo "Git already installed. Do you want to upgrade it?"
-    confirm sudo apt install git
+    nohero_echo "Package '$1' already installed. Do you want to upgrade it?"
+    confirm sudo apt install "$1"
   fi
 }
 
@@ -165,7 +170,7 @@ function server_init {
   fi
   remote_do "root@$1" add_user
   nohero_echo "We are finished connecting as 'root'."
-  remote_do "nohero@$1" apt_update install_git
+  remote_do "nohero@$1" apt_update "install_pkg git"
 }
 
 # Execute local commands and proxy the remote ones.
