@@ -114,6 +114,43 @@ function remote_install_pkg {
   fi
 }
 
+function remote_setup_repo {
+  local repo="/home/nohero/repo.git"
+  local worktree="/home/nohero/app"
+
+  if [[ ! -d "$repo" ]]; then
+    nh_echo "Creating git worktree: $worktree..."
+    mkdir -p "$worktree"
+  else
+    nh_echo "Git worktree '$worktree' already exists."
+  fi
+
+  if [[ ! -d "$repo" ]]; then
+    nh_echo "Creating git bare repository: $repo..."
+    mkdir -p "$repo"
+    cd "$repo"
+    git init --bare
+  else
+    nh_echo "Git repository '$repo' already exists."
+  fi
+
+  cd "$repo"
+  nh_echo "Setting up git repository..."
+  git config receive.denycurrentbranch ignore
+
+  nh_echo "Setting up git hooks..."
+  cat << EOF > "$repo/hooks/post-receive"
+#!/bin/sh
+GIT_WORK_TREE="$worktree" git checkout -f
+if [ -f "$worktree/Gemfile" ] && command -v bundle >/dev/null; then
+  cd "$worktree"
+  (unset GIT_DIR; exec bundle install)
+  true
+fi
+EOF
+  chmod +x "$repo/hooks/post-receive"
+}
+
 # Sub Commands
 # ============
 
@@ -151,7 +188,8 @@ function server_init {
     apt_update \
     "install_pkg git" \
     "install_pkg imagemagick convert" \
-    "install_pkg ghostscript gs"
+    "install_pkg ghostscript gs" \
+    setup_repo
 }
 
 # Execute local commands and proxy the remote ones.
