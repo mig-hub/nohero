@@ -147,7 +147,11 @@ function server_init {
   fi
   remote_do "root@$1" add_user
   nh_echo "We are finished connecting as 'root'."
-  remote_do "nohero@$1" apt_update "install_pkg git"
+  remote_do "nohero@$1" \
+    apt_update \
+    "install_pkg git" \
+    "install_pkg imagemagick convert" \
+    "install_pkg ghostscript gs"
 }
 
 # Execute local commands and proxy the remote ones.
