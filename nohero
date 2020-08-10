@@ -6,16 +6,13 @@ set -e
 # HELPERS
 # =======
 
-# Echo on stderr.
-function errcho { >&2 echo $@; }
-
-# Echo with a prefix.
+# Print line with a prefix.
 # Use typeset to use it on remote as well.
-function nohero_echo {
+function nh_echo {
   printf "\033[0;34mNoHero |>\033[0m $@\n"
 }
-function nohero_errcho {
-  nohero_echo "\033[0;31m$@\033[0m"
+function nh_errcho {
+  >&2 printf "\033[0;31mNoHero |>\033[0m $@\n"
 }
 
 function confirm {
@@ -31,7 +28,7 @@ function confirm {
 # Better than a systematic check.
 if ! type -p git >/dev/null; then
   git() {
-    errcho "Error: git is required for nohero. Please install git and try again."
+    nh_errcho "Error: 'git' is required for NoHero. Please install git and try again."
     exit 1
   }
 fi
@@ -44,7 +41,7 @@ fi
 # Could be improved by not having multiple typesets if a functions is called
 # multiple times.
 function remote_script {
-  local str="$(typeset -f nohero_echo -f nohero_errcho -f confirm)\n"
+  local str="$(typeset -f nh_echo -f nh_errcho -f confirm)\n"
   for val in "$@"; do
     local cmd="remote_${val/%\ */}"
     str="${str}$(typeset -f $cmd)\nremote_${val}\n"
@@ -56,7 +53,7 @@ function remote_script {
 # Remote is the first argument and the rest of the arguments are local functions.
 # Pass function names without the "remote_" prefix. 
 function remote_do {
-  nohero_echo "Connecting as $1. Is it OK?"
+  nh_echo "Connecting as $1. Is it OK?"
   confirm ssh -t "$1" "$(remote_script "${@:2}")"
 }
 
@@ -73,16 +70,16 @@ function remote_add_user {
   if ! id -u "$username" > /dev/null 2>&1; then
     adduser --disabled-password --shell "/bin/bash" --gecos "" "$username"
   else
-    nohero_echo "User '$username' already exists."
+    nh_echo "User '$username' already exists."
   fi
-  nohero_echo "Making sure '$username' is in sudo group..."
+  nh_echo "Making sure '$username' is in sudo group..."
   usermod -aG sudo "$username"
   if [[ -d "/home/$username/.ssh" ]]; then
-    nohero_echo "Directory '.ssh' already exists."
+    nh_echo "Directory '.ssh' already exists."
   else
-    nohero_echo "Copying '/root/.ssh' directory to '/home/$username/.ssh'..."
+    nh_echo "Copying '/root/.ssh' directory to '/home/$username/.ssh'..."
     if [[ ! -d '/root/.ssh' ]]; then
-      nohero_errcho "Error: No '/root/.ssh' directory was found. NoHero works only with SSH keys connections."
+      nh_errcho "Error: No '/root/.ssh' directory was found. NoHero works only with SSH keys connections."
       exit 1
     fi
     cp -Rfv "/root/.ssh" "/home/$username/"
@@ -92,27 +89,27 @@ function remote_add_user {
     # Not sure what is the cleanest way to do this.
     # Basically we only want to allow ssh keys, not password for our user.
     # So we need to make sure 'sudo' commands don't ask one.
-    nohero_echo "Editing '/etc/sudoers' to set NOPASSWD for '$username'."
+    nh_echo "Editing '/etc/sudoers' to set NOPASSWD for '$username'."
     echo "$username ALL=(ALL) NOPASSWD:ALL" | sudo EDITOR='tee -a' visudo
   else
-    nohero_echo "There is already a line for '$username' in the '/etc/sudoers' file."
+    nh_echo "There is already a line for '$username' in the '/etc/sudoers' file."
   fi
 }
 
 function remote_apt_update {
-  nohero_echo "Updating apt..."
+  nh_echo "Updating apt..."
   sudo apt update
 }
 
 function remote_install_pkg {
   if [[ $# -eq 0 ]] || [[ $# -gt 2 ]]; then
-    nohero_errcho "Usage: remote_install_pkg <package-name> [command-to-test-installation]"
+    nh_errcho "Usage: remote_install_pkg <package-name> [command-to-test-installation]"
     exit 1
   fi
   if ! type -p "${2:-$1}" >/dev/null; then
     sudo apt install "$1"
   else
-    nohero_echo "Package '$1' already installed. Do you want to upgrade it?"
+    nh_echo "Package '$1' already installed. Do you want to upgrade it?"
     confirm sudo apt install "$1"
   fi
 }
@@ -133,23 +130,23 @@ function server {
     esac
   done
   git remote get-url $gitremote 2>/dev/null || \
-    errcho "Error: cannot find git remote '$gitremote'."
+    nh_errcho "Error: cannot find git remote '$gitremote'."
 }
 
 # Takes hostname as argument and setup the server.
 function server_init {
   local usage="Usage: nohero sever:init <hostname>"
   if [[ $# -eq 0 ]]; then
-    errcho "Error: missing hostname."
-    errcho $usage
+    nh_errcho "Error: missing hostname."
+    nh_errcho "$usage"
     exit 1
   elif [[ $# -gt 1 ]]; then
-    errcho "Error: too many arguments."
-    errcho $usage
+    nh_errcho "Error: too many arguments."
+    nh_errcho "$usage"
     exit 1
   fi
   remote_do "root@$1" add_user
-  nohero_echo "We are finished connecting as 'root'."
+  nh_echo "We are finished connecting as 'root'."
   remote_do "nohero@$1" apt_update "install_pkg git"
 }
 
@@ -160,7 +157,7 @@ if [[ $1 =~ ^(debug|server|server:init)$ ]]; then
   "${1//:/_}" "${@:2}" 
 else
   # This part needs to delegate if possible
-  errcho "Warning: Invalid subcommand $1"
+  nh_errcho "Error: Invalid subcommand '$1'."
   exit 1
 fi
 
